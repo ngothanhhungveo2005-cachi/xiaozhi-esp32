@@ -2,14 +2,21 @@
 #define OLED_DISPLAY_H
 
 #include "lvgl_display.h"
+#include "oled_face.h"
 
 #include <esp_lcd_panel_io.h>
 #include <esp_lcd_panel_ops.h>
+
+#include <memory>
 
 class OledDisplay : public LvglDisplay {
 private:
     esp_lcd_panel_io_handle_t panel_io_ = nullptr;
     esp_lcd_panel_handle_t panel_ = nullptr;
+
+    // Animated cartoon face shown instead of the static emoji glyph. The glyph label
+    // (emotion_label_) is kept for icons that are not faces (alerts: warning, cloud_off, ...).
+    std::unique_ptr<OledFace> face_;
 
     lv_obj_t* top_bar_ = nullptr;
     lv_obj_t* status_bar_ = nullptr;
@@ -33,6 +40,7 @@ public:
     ~OledDisplay();
 
     virtual void SetupUI() override;
+    virtual void SetStatus(const char* status) override;
     virtual void SetChatMessage(const char* role, const char* content) override;
     virtual void RemoveChatMessage(const char* role, const char* content) override;
     virtual bool SetEmotion(const char* emotion) override;
