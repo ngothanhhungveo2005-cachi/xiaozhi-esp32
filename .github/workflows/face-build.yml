@@ -1,0 +1,30 @@
+name: Face build
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    container: espressif/idf:release-v6.1
+    strategy:
+      fail-fast: false
+      matrix:
+        variant:
+          - bread-compact-wifi-128x64
+          - bread-compact-wifi
+    steps:
+      - uses: actions/checkout@v7
+      - name: Build
+        shell: bash
+        run: |
+          source "$IDF_PATH/export.sh"
+          python scripts/build.py bread-compact-wifi --name ${{ matrix.variant }} --language vi-VN --wake-word wn9_hijoy_tts
+      - uses: actions/upload-artifact@v7
+        with:
+          name: firmware-${{ matrix.variant }}
+          path: build/merged-binary.bin
+          if-no-files-found: error
