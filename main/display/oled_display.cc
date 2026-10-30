@@ -5,6 +5,7 @@
 #include "settings.h"
 
 #include <algorithm>
+#include <cstring>
 #include <string>
 
 #include <esp_err.h>
@@ -19,6 +20,11 @@ LV_FONT_DECLARE(BUILTIN_TEXT_FONT);
 LV_FONT_DECLARE(BUILTIN_ICON_FONT);
 LV_FONT_DECLARE(font_material_symbols_30_1);
 LV_FONT_DECLARE(font_noto_emoji_30_1);
+
+// Size of the animated face on a 128x64 screen (the area below the 16 px top bar).
+// The subtitle gets the rest of the width; a bigger face leaves less room for it.
+static constexpr int kFaceWidth128x64 = 64;
+static constexpr int kFaceHeight128x64 = 48;
 
 OledDisplay::OledDisplay(esp_lcd_panel_io_handle_t panel_io, esp_lcd_panel_handle_t panel,
                          int width, int height, bool mirror_x, bool mirror_y)
@@ -103,6 +109,11 @@ void OledDisplay::SetupUI() {
 }
 
 OledDisplay::~OledDisplay() {
+    {
+        // The face owns an lv_timer and an lv_obj: release them while LVGL is still alive.
+        DisplayLockGuard lock(this);
+        face_.reset();
+    }
     if (content_ != nullptr) {
         lv_obj_del(content_);
     }
@@ -276,7 +287,7 @@ void OledDisplay::SetupUI_128x64() {
     lv_obj_set_style_flex_main_place(content_, LV_FLEX_ALIGN_CENTER, 0);
 
     content_left_ = lv_obj_create(content_);
-    lv_obj_set_size(content_left_, 32, LV_SIZE_CONTENT);
+    lv_obj_set_size(content_left_, kFaceWidth128x64, LV_SIZE_CONTENT);
     lv_obj_set_style_pad_all(content_left_, 0, 0);
     lv_obj_set_style_border_width(content_left_, 0, 0);
 
@@ -285,6 +296,11 @@ void OledDisplay::SetupUI_128x64() {
     lv_label_set_text(emotion_label_, MATERIAL_SYMBOLS_ROBOT_2);
     lv_obj_center(emotion_label_);
     lv_obj_set_style_pad_top(emotion_label_, 8, 0);
+
+    // Animated face: 64x48 px, hidden until the first face emotion arrives.
+    face_ = std::make_unique<OledFace>(content_left_, kFaceWidth128x64, kFaceHeight128x64);
+    lv_obj_center(face_->obj());
+    lv_obj_add_flag(face_->obj(), LV_OBJ_FLAG_HIDDEN);
 
     content_right_ = lv_obj_create(content_);
     lv_obj_set_size(content_right_, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
@@ -297,7 +313,7 @@ void OledDisplay::SetupUI_128x64() {
     lv_label_set_text(chat_message_label_, "");
     lv_label_set_long_mode(chat_message_label_, LV_LABEL_LONG_SCROLL_CIRCULAR);
     lv_obj_set_style_text_align(chat_message_label_, LV_TEXT_ALIGN_LEFT, 0);
-    lv_obj_set_width(chat_message_label_, width_ - 32);
+    lv_obj_set_width(chat_message_label_, width_ - kFaceWidth128x64);
     lv_obj_set_style_pad_top(chat_message_label_, 14, 0);
 
     // Start scrolling subtitle after a delay
@@ -352,6 +368,11 @@ void OledDisplay::SetupUI_128x32() {
     lv_obj_set_style_text_font(emotion_label_, large_icon_font, 0);
     lv_label_set_text(emotion_label_, MATERIAL_SYMBOLS_ROBOT_2);
     lv_obj_center(emotion_label_);
+
+    // Animated face fills the 32x32 emotion box, hidden until the first face emotion arrives.
+    face_ = std::make_unique<OledFace>(content_, 32, 32);
+    lv_obj_center(face_->obj());
+    lv_obj_add_flag(face_->obj(), LV_OBJ_FLAG_HIDDEN);
 
     /* Right side */
     side_bar_ = lv_obj_create(container_);
@@ -410,6 +431,14 @@ void OledDisplay::SetupUI_128x32() {
                                    LV_PART_MAIN);
 }
 
+void OledDisplay::SetStatus(const char* status) {
+    LvglDisplay::SetStatus(status);
+    // The face flaps its mouth while the device is speaking.
+    if (face_ != nullptr && status != nullptr) {
+        face_->SetTalking(strcmp(status, Lang::Strings::SPEAKING) == 0);
+    }
+}
+
 bool OledDisplay::SetEmotion(const char* emotion) {
     auto lvgl_theme = static_cast<LvglTheme*>(current_theme_);
     const char* utf8 = noto_emoji_get_utf8(emotion);
@@ -422,6 +451,17 @@ bool OledDisplay::SetEmotion(const char* emotion) {
     if (emotion_label_ == nullptr) {
         return false;
     }
+    // A face emotion (happy, sad, ...) is shown with the animated face.
+    if (face_ != nullptr && face_->SetEmotion(emotion)) {
+        lv_obj_add_flag(emotion_label_, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_remove_flag(face_->obj(), LV_OBJ_FLAG_HIDDEN);
+        return true;
+    }
+    // Anything else (alert icons such as warning / cloud_off) keeps using the glyph label.
+    if (face_ != nullptr) {
+        lv_obj_add_flag(face_->obj(), LV_OBJ_FLAG_HIDDEN);
+    }
+    lv_obj_remove_flag(emotion_label_, LV_OBJ_FLAG_HIDDEN);
     if (utf8 != nullptr) {
         lv_obj_set_style_text_font(emotion_label_, emotion_font, 0);
         lv_label_set_text(emotion_label_, utf8);
